@@ -347,6 +347,13 @@ function mergeStates(stored, incoming) {
 		base.meta.highest_main_unlocked_index,
 		inc.meta.highest_main_unlocked_index
 	);
+	var incomingDifficulty = intValue(inc.meta.current_stage_difficulty, base.meta.current_stage_difficulty);
+	if (incomingDifficulty < 1) {
+		incomingDifficulty = 1;
+	} else if (incomingDifficulty > 3) {
+		incomingDifficulty = 3;
+	}
+	base.meta.current_stage_difficulty = incomingDifficulty;
 	if (base.meta.current_stage_id === "" && inc.meta.current_stage_id !== "") {
 		base.meta.current_stage_id = inc.meta.current_stage_id;
 		base.meta.current_stage_is_dlc = inc.meta.current_stage_is_dlc;
