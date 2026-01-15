@@ -64,6 +64,7 @@ function rpcSubmitRun(ctx, logger, nk, payload) {
 	var timeMs = intValue(data.time_ms, 0);
 	var difficulty = intValue(data.difficulty, 1);
 	var adsUsed = intValue(data.ads_used, 0);
+	var mainStageIndex = intValue(data.main_stage_index, 0);
 	if (timeSec <= 0.0 && timeMs > 0) {
 		timeSec = timeMs / 1000.0;
 	}
@@ -129,6 +130,19 @@ function rpcSubmitRun(ctx, logger, nk, payload) {
 	}
 	var prevUnlocked = intValue(state.progress.stage_difficulty_unlocked[stageId], 1);
 	state.progress.stage_difficulty_unlocked[stageId] = Math.max(prevUnlocked, nextDifficulty);
+
+	if (mainStageIndex > 0) {
+		state.meta.current_stage_id = stageId;
+		state.meta.current_stage_is_dlc = false;
+		state.meta.current_main_level_index = mainStageIndex;
+		state.meta.current_stage_difficulty = difficulty;
+		var nextIndex = mainStageIndex + 1;
+		if (nextIndex > intValue(state.meta.highest_main_unlocked_index, 1)) {
+			state.meta.highest_main_unlocked_index = nextIndex;
+		}
+	} else if (difficulty > 0) {
+		state.meta.current_stage_difficulty = difficulty;
+	}
 
 	updateDailyState(state, stageId, Math.floor(Date.now() / 1000));
 
