@@ -62,6 +62,8 @@ function rpcSubmitRun(ctx, logger, nk, payload) {
 	var moves = intValue(data.moves, -1);
 	var timeSec = floatValue(data.time_sec, 0.0);
 	var timeMs = intValue(data.time_ms, 0);
+	var difficulty = intValue(data.difficulty, 1);
+	var adsUsed = intValue(data.ads_used, 0);
 	if (timeSec <= 0.0 && timeMs > 0) {
 		timeSec = timeMs / 1000.0;
 	}
@@ -89,13 +91,18 @@ function rpcSubmitRun(ctx, logger, nk, payload) {
 	state.stats.best_scores = state.stats.best_scores || {};
 	var best = state.stats.best_scores[stageId];
 	if (!best) {
-		best = {"moves": -1, "time": 0.0};
+		best = {"moves": -1, "time": 0.0, "ads_used": 0};
 	}
 	if (moves >= 0 && (best.moves < 0 || moves < best.moves)) {
 		best.moves = moves;
+		best.ads_used = adsUsed;
 	}
 	if (timeSec > 0 && (best.time <= 0 || timeSec < best.time)) {
 		best.time = timeSec;
+		best.ads_used = adsUsed;
+	}
+	if (best.moves == moves && best.time == timeSec && adsUsed < intValue(best.ads_used, 0)) {
+		best.ads_used = adsUsed;
 	}
 	state.stats.best_scores[stageId] = best;
 
@@ -110,6 +117,18 @@ function rpcSubmitRun(ctx, logger, nk, payload) {
 		state.progress.completed_stage_ids || [],
 		[stageId]
 	);
+	state.progress.stage_difficulty_completed = state.progress.stage_difficulty_completed || {};
+	var prevDifficulty = intValue(state.progress.stage_difficulty_completed[stageId], 0);
+	state.progress.stage_difficulty_completed[stageId] = Math.max(prevDifficulty, difficulty);
+	state.progress.stage_difficulty_unlocked = state.progress.stage_difficulty_unlocked || {};
+	var nextDifficulty = difficulty + 1;
+	if (nextDifficulty < 1) {
+		nextDifficulty = 1;
+	} else if (nextDifficulty > 3) {
+		nextDifficulty = 3;
+	}
+	var prevUnlocked = intValue(state.progress.stage_difficulty_unlocked[stageId], 1);
+	state.progress.stage_difficulty_unlocked[stageId] = Math.max(prevUnlocked, nextDifficulty);
 
 	updateDailyState(state, stageId, Math.floor(Date.now() / 1000));
 
@@ -272,7 +291,9 @@ function sanitizeState(state) {
 			"temp_stage_ids_by_date": sanitizeStringArrayDict(unlocks.temp_stage_ids_by_date)
 		},
 		"progress": {
-			"completed_stage_ids": sanitizeStringArray(progress.completed_stage_ids)
+			"completed_stage_ids": sanitizeStringArray(progress.completed_stage_ids),
+			"stage_difficulty_completed": sanitizeIntDict(progress.stage_difficulty_completed),
+			"stage_difficulty_unlocked": sanitizeIntDict(progress.stage_difficulty_unlocked)
 		},
 		"meta": {
 			"current_stage_id": stringValue(meta.current_stage_id),
@@ -280,7 +301,8 @@ function sanitizeState(state) {
 			"current_main_level_index": intValue(meta.current_main_level_index, 1),
 			"current_dlc_pack_id": stringValue(meta.current_dlc_pack_id),
 			"current_dlc_level_index": intValue(meta.current_dlc_level_index, 1),
-			"highest_main_unlocked_index": intValue(meta.highest_main_unlocked_index, 1)
+			"highest_main_unlocked_index": intValue(meta.highest_main_unlocked_index, 1),
+			"current_stage_difficulty": intValue(meta.current_stage_difficulty, 1)
 		},
 		"daily": {
 			"daily_completion_log": sanitizeDailyLog(daily.daily_completion_log),
@@ -310,6 +332,14 @@ function mergeStates(stored, incoming) {
 	base.progress.completed_stage_ids = arrayStringUnion(
 		base.progress.completed_stage_ids,
 		inc.progress.completed_stage_ids
+	);
+	base.progress.stage_difficulty_completed = mergeIntDictMax(
+		base.progress.stage_difficulty_completed,
+		inc.progress.stage_difficulty_completed
+	);
+	base.progress.stage_difficulty_unlocked = mergeIntDictMax(
+		base.progress.stage_difficulty_unlocked,
+		inc.progress.stage_difficulty_unlocked
 	);
 	base.stats.best_scores = mergeBestScores(base.stats.best_scores, inc.stats.best_scores);
 	base.stats.stage_stars = mergeStageStars(base.stats.stage_stars, inc.stats.stage_stars);
@@ -415,6 +445,17 @@ function sanitizeBoolDict(value) {
 	return out;
 }
 
+function sanitizeIntDict(value) {
+	if (value == null || typeof value !== "object") {
+		return {};
+	}
+	var out = {};
+	for (var key in value) {
+		out[key] = intValue(value[key], 0);
+	}
+	return out;
+}
+
 function sanitizeBestScores(value) {
 	if (value == null || typeof value !== "object") {
 		return {};
@@ -432,7 +473,8 @@ function sanitizeBestScores(value) {
 		}
 		out[key] = {
 			"moves": intValue(entry.moves, -1),
-			"time": timeValue
+			"time": timeValue,
+			"ads_used": intValue(entry.ads_used, intValue(entry.ads, 0))
 		};
 	}
 	return out;
@@ -477,6 +519,15 @@ function mergeStringArrayDict(a, b) {
 	return out;
 }
 
+function mergeIntDictMax(a, b) {
+	var out = sanitizeIntDict(a);
+	var extra = sanitizeIntDict(b);
+	for (var key in extra) {
+		out[key] = Math.max(intValue(out[key], 0), intValue(extra[key], 0));
+	}
+	return out;
+}
+
 function arrayStringUnion(a, b) {
 	var out = [];
 	var seen = {};
@@ -507,12 +558,30 @@ function mergeBestScores(a, b) {
 			base[key] = incoming;
 			continue;
 		}
-		if (incoming.moves >= 0 && (current.moves < 0 || incoming.moves < current.moves)) {
-			current.moves = incoming.moves;
+		var incomingMoves = intValue(incoming.moves, -1);
+		var currentMoves = intValue(current.moves, -1);
+		var incomingTime = floatValue(incoming.time, 0.0);
+		var currentTime = floatValue(current.time, 0.0);
+		var incomingAds = intValue(incoming.ads_used, 0);
+		var currentAds = intValue(current.ads_used, 0);
+
+		var replace = false;
+		if (incomingMoves >= 0 && (currentMoves < 0 || incomingMoves < currentMoves)) {
+			replace = true;
+		} else if (incomingMoves == currentMoves) {
+			if (incomingTime > 0 && (currentTime <= 0 || incomingTime < currentTime)) {
+				replace = true;
+			} else if (incomingTime == currentTime && incomingAds < currentAds) {
+				currentAds = incomingAds;
+			}
 		}
-		if (incoming.time > 0 && (current.time <= 0 || incoming.time < current.time)) {
-			current.time = incoming.time;
+
+		if (replace) {
+			current.moves = incomingMoves;
+			current.time = incomingTime;
+			currentAds = incomingAds;
 		}
+		current.ads_used = currentAds;
 		base[key] = current;
 	}
 	return base;
